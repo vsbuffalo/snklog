@@ -6,6 +6,7 @@ from pathlib import Path
 import argparse
 import sys
 import subprocess
+import re
 
 SLURM_LOG_DIR = ".snakemake/slurm_logs/"
 SNAKEMAKE_LOG_DIR = ".snakemake/log/"
@@ -87,6 +88,60 @@ def less_log(args):
 
     subprocess.run(["less", file_to_open])
 
+
+
+def locate_failed_rules_in_log(log_file):
+    failed_rules = []
+    with open(log_file, 'r') as f:
+        content = f.read()
+        pattern = r"Error in rule (\w+):\s*jobid: (\d+).*?log: (.*?) \(check log file\(s\) for error details\)"
+        matches = re.findall(pattern, content, re.DOTALL)
+        for match in matches:
+            rule_name, job_id, log_file = match
+            failed_rules.append({'rule': rule_name, 'job_id': job_id, 'log_file': log_file.strip()})
+    return failed_rules
+
+
+def print_rule_logs(failed_rules):
+    for rule in failed_rules:
+        print(f"\n{'='*40}")
+        print(f"Rule: {rule['rule']}")
+        print(f"Job ID: {rule['job_id']}")
+        print(f"Log file: {rule['log_file']}")
+        print(f"{'='*40}\n")
+        try:
+            with open(rule['log_file'], 'r') as f:
+                print(f.read())
+        except FileNotFoundError:
+            print(f"Log file not found: {rule['log_file']}")
+
+
+def show_failed_rules(args):
+    if args.identifier:
+        try:
+            log_file = get_file_by_identifier(args.identifier)
+        except ValueError as e:
+            print(str(e))
+            return
+    else:
+        snakemake_files = get_sorted_files(SNAKEMAKE_LOG_DIR)
+        if not snakemake_files:
+            print("No Snakemake log files found.")
+            return
+        log_file = snakemake_files[0]
+    
+    print(f"Analyzing Snakemake log: {log_file}")
+    
+    failed_rules = locate_failed_rules_in_log(log_file)
+    if not failed_rules:
+        print("No failed rules found in the log.")
+        return
+    
+    print(f"Found {len(failed_rules)} failed rule(s). Printing their logs:\n")
+    print_rule_logs(failed_rules)
+
+
+
 def main():
     parser = argparse.ArgumentParser(description="Manage Snakemake and Slurm log files")
     subparsers = parser.add_subparsers(dest="command")
@@ -108,6 +163,10 @@ def main():
     # Less command and its alias
     less_parser = subparsers.add_parser("less", aliases=["l"], help="Open a log file with less")
     less_parser.add_argument("identifier", help="Identifier of the log file (e.g., S1, M2, s1, m2)")
+    
+    # Failed command and its alias
+    failed_parser = subparsers.add_parser("failed", aliases=["f"], help="Show logs of failed rules")
+    failed_parser.add_argument("identifier", nargs="?", help="Identifier of the log file (e.g., S1, M2, s1, m2). If not provided, the most recent log will be used.")
 
     args = parser.parse_args()
 
@@ -117,6 +176,8 @@ def main():
         tail_log(args)
     elif args.command in ["less", "l"]:
         less_log(args)
+    elif args.command in ["failed", "f"]:
+        show_failed_rules(args)
     else:
         parser.print_help()
 
