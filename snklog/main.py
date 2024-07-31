@@ -6,6 +6,7 @@ from pathlib import Path
 import argparse
 import sys
 import subprocess
+import re
 
 SLURM_LOG_DIR = ".snakemake/slurm_logs/"
 SNAKEMAKE_LOG_DIR = ".snakemake/log/"
@@ -87,6 +88,81 @@ def less_log(args):
 
     subprocess.run(["less", file_to_open])
 
+
+
+
+
+
+def locate_failed_rules_in_log(log_file):
+    failed_rules = []
+    with open(log_file, 'r') as f:
+        content = f.read()
+        # Updated pattern to match rule name, time, and potential log files
+        pattern = r'\[(.*?)\]\nError in rule (\w+):.*?log: (.*?) \(check log file\(s\) for error details\)'
+        matches = re.findall(pattern, content, re.DOTALL)
+        
+        # if no match with log, try without log
+        if not matches:
+            pattern = r'\[(.*?)\]\nError in rule (\w+):'
+            matches = re.findall(pattern, content, re.DOTALL)
+        
+        # Process the matches
+        failed_rules = []
+        for match in matches:
+            time, rule_name, *log_file = match
+            failed_rules.append({
+                'time': time.strip()[0:24],
+                'rule_name': rule_name,
+                'log_file': log_file[0].strip() if log_file else None
+            })
+        
+        return failed_rules
+
+def print_rule_logs(failed_rules, verbose):
+    for rule in failed_rules:
+        print(f"\n{'='*60}")
+        print(f"Rule: {rule['rule_name']}")
+        print(f"Time: {rule['time']}")
+        print(f"Log file: {rule['log_file']}")
+        if rule['log_file']:
+            if verbose:
+                print("\nPrinting snakemake job logs. Ensure the latest snakemake log is used as specific job logs may have been overwritten.")
+                print(f"{'='*60}\n")
+                try:
+                    with open(rule['log_file'], 'r') as f:
+                        print(f"\n\n{f.read()}")
+                except FileNotFoundError:
+                    print(f"Log file not found: {rule['log_file']}")
+        else:
+            print("No specific log file assigned to this rule.")
+
+
+def show_failed_rules(args, verbose):
+    if args.identifier:
+        try:
+            log_file = get_file_by_identifier(args.identifier)
+        except ValueError as e:
+            print(str(e))
+            return
+    else:
+        snakemake_files = get_sorted_files(SNAKEMAKE_LOG_DIR)
+        if not snakemake_files:
+            print("No Snakemake log files found.")
+            return
+        log_file = snakemake_files[0]
+    
+    print(f"Analyzing Snakemake log: {log_file}")
+    
+    failed_rules = locate_failed_rules_in_log(log_file)
+    if not failed_rules:
+        print("No failed rules found in the log.")
+        return
+    
+    print(f"Found {len(failed_rules)} failed rule(s):")
+    print_rule_logs(failed_rules, verbose=verbose)
+
+
+
 def main():
     parser = argparse.ArgumentParser(description="Manage Snakemake and Slurm log files")
     subparsers = parser.add_subparsers(dest="command")
@@ -108,6 +184,13 @@ def main():
     # Less command and its alias
     less_parser = subparsers.add_parser("less", aliases=["l"], help="Open a log file with less")
     less_parser.add_argument("identifier", help="Identifier of the log file (e.g., S1, M2, s1, m2)")
+    
+    # Failed command and its alias
+    failed_parser = subparsers.add_parser("failed", aliases=["f"], help="Show failed rules in a log file")
+    failed_parser.add_argument("identifier", nargs="?", help="Identifier of the log file (e.g., S1, M2, s1, m2). If not provided, the most recent log will be used.")
+
+    failed_verbose_parser = subparsers.add_parser("failedv", aliases=['fv'], help="Show failed rules in a lo file and show specific rule logs if present")
+    failed_verbose_parser.add_argument("identifier", nargs="?", help="Identifier of the log file (e.g., S1, M2, s1, m2). If not provided, the most recent log will be used.")
 
     args = parser.parse_args()
 
@@ -117,6 +200,10 @@ def main():
         tail_log(args)
     elif args.command in ["less", "l"]:
         less_log(args)
+    elif args.command in ["failed", "f"]:
+        show_failed_rules(args, verbose=False)
+    elif args.command in ['failedv', "fv"]:
+        show_failed_rules(args, verbose=True)
     else:
         parser.print_help()
 
