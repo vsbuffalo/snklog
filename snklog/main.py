@@ -90,33 +90,54 @@ def less_log(args):
 
 
 
+
+
+
 def locate_failed_rules_in_log(log_file):
     failed_rules = []
     with open(log_file, 'r') as f:
         content = f.read()
-        pattern = r"Error in rule (\w+):\s*jobid: (\d+).*?log: (.*?) \(check log file\(s\) for error details\)"
+        # Updated pattern to match rule name, time, and potential log files
+        pattern = r'\[(.*?)\]\nError in rule (\w+):.*?log: (.*?) \(check log file\(s\) for error details\)'
         matches = re.findall(pattern, content, re.DOTALL)
+        
+        # if no match with log, try without log
+        if not matches:
+            pattern = r'\[(.*?)\]\nError in rule (\w+):'
+            matches = re.findall(pattern, content, re.DOTALL)
+        
+        # Process the matches
+        failed_rules = []
         for match in matches:
-            rule_name, job_id, log_file = match
-            failed_rules.append({'rule': rule_name, 'job_id': job_id, 'log_file': log_file.strip()})
-    return failed_rules
+            time, rule_name, *log_file = match
+            failed_rules.append({
+                'time': time.strip()[0:24],
+                'rule_name': rule_name,
+                'log_file': log_file[0].strip() if log_file else None
+            })
+        
+        return failed_rules
 
-
-def print_rule_logs(failed_rules):
+def print_rule_logs(failed_rules, verbose):
     for rule in failed_rules:
-        print(f"\n{'='*40}")
-        print(f"Rule: {rule['rule']}")
-        print(f"Job ID: {rule['job_id']}")
+        print(f"\n{'='*60}")
+        print(f"Rule: {rule['rule_name']}")
+        print(f"Time: {rule['time']}")
         print(f"Log file: {rule['log_file']}")
-        print(f"{'='*40}\n")
-        try:
-            with open(rule['log_file'], 'r') as f:
-                print(f.read())
-        except FileNotFoundError:
-            print(f"Log file not found: {rule['log_file']}")
+        if rule['log_file']:
+            if verbose:
+                print("\nPrinting snakemake job logs. Ensure the latest snakemake log is used as specific job logs may have been overwritten.")
+                print(f"{'='*60}\n")
+                try:
+                    with open(rule['log_file'], 'r') as f:
+                        print(f"\n\n{f.read()}")
+                except FileNotFoundError:
+                    print(f"Log file not found: {rule['log_file']}")
+        else:
+            print("No specific log file assigned to this rule.")
 
 
-def show_failed_rules(args):
+def show_failed_rules(args, verbose):
     if args.identifier:
         try:
             log_file = get_file_by_identifier(args.identifier)
@@ -137,8 +158,8 @@ def show_failed_rules(args):
         print("No failed rules found in the log.")
         return
     
-    print(f"Found {len(failed_rules)} failed rule(s). Printing their logs:\n")
-    print_rule_logs(failed_rules)
+    print(f"Found {len(failed_rules)} failed rule(s):")
+    print_rule_logs(failed_rules, verbose=verbose)
 
 
 
@@ -165,8 +186,11 @@ def main():
     less_parser.add_argument("identifier", help="Identifier of the log file (e.g., S1, M2, s1, m2)")
     
     # Failed command and its alias
-    failed_parser = subparsers.add_parser("failed", aliases=["f"], help="Show logs of failed rules")
+    failed_parser = subparsers.add_parser("failed", aliases=["f"], help="Show failed rules in a log file")
     failed_parser.add_argument("identifier", nargs="?", help="Identifier of the log file (e.g., S1, M2, s1, m2). If not provided, the most recent log will be used.")
+
+    failed_verbose_parser = subparsers.add_parser("failedv", aliases=['fv'], help="Show failed rules in a lo file and show specific rule logs if present")
+    failed_verbose_parser.add_argument("identifier", nargs="?", help="Identifier of the log file (e.g., S1, M2, s1, m2). If not provided, the most recent log will be used.")
 
     args = parser.parse_args()
 
@@ -177,7 +201,9 @@ def main():
     elif args.command in ["less", "l"]:
         less_log(args)
     elif args.command in ["failed", "f"]:
-        show_failed_rules(args)
+        show_failed_rules(args, verbose=False)
+    elif args.command in ['failedv', "fv"]:
+        show_failed_rules(args, verbose=True)
     else:
         parser.print_help()
 
